@@ -199,6 +199,39 @@
             },
 
             API: {
+                isSyncing: false,
+                syncQueue: [],
+                
+                processQueue: async () => {
+                    if (App.API.isSyncing || App.API.syncQueue.length === 0) return;
+                    App.API.isSyncing = true;
+                    
+                    const task = App.API.syncQueue.shift();
+                    
+                    try {
+                        const response = await fetch(App.Config.WEB_APP_URL, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                            body: JSON.stringify(task.requestBody)
+                        });
+                        const res = await response.json();
+                        if (task.resolve) task.resolve(res);
+                    } catch (error) {
+                        console.error("Background Sync Failed:", error);
+                        if (task.reject) task.reject(error);
+                    } finally {
+                        App.API.isSyncing = false;
+                        App.API.processQueue(); // Process next item
+                    }
+                },
+
+                enqueue: (requestBody) => {
+                    return new Promise((resolve, reject) => {
+                        App.API.syncQueue.push({ requestBody, resolve, reject });
+                        App.API.processQueue();
+                    });
+                },
+
                 optimisticSave: async (action, payload, table, primaryKey, isUpdate = false, isDelete = false) => {
                     App.Utils.closeModals();
                     App.Utils.showSync();
@@ -217,12 +250,7 @@
                     App.Router.navigate(App.State.activeView, true); 
 
                     try {
-                        const response = await fetch(App.Config.WEB_APP_URL, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                            body: JSON.stringify({ action, auth: { email: App.State.user.email, password: App.State.user.password }, payload })
-                        });
-                        const res = await response.json();
+                        const res = await App.API.enqueue({ action, auth: { email: App.State.user.email, password: App.State.user.password }, payload });
                         
                         if (res.status === 'success') {
                             await App.API.syncAll(false, true); 
@@ -242,10 +270,7 @@
                         App.Utils.showLoader();
                         try {
                             const request = { action, auth: App.State.user ? { email: App.State.user.email, password: App.State.user.password } : payload.auth, payload };
-                            const response = await fetch(App.Config.WEB_APP_URL, {
-                                method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(request)
-                            });
-                            const res = await response.json();
+                            const res = await App.API.enqueue(request);
                             App.Utils.hideLoader();
                             if (res.status === 'success') resolve(res); else { App.Utils.toast(res.message, 'error'); reject(res.message); }
                         } catch (err) {
@@ -258,10 +283,7 @@
                     if(!silent) App.Utils.showSync();
                     try {
                         const request = { action: 'syncAll', auth: { email: App.State.user.email, password: App.State.user.password } };
-                        const response = await fetch(App.Config.WEB_APP_URL, {
-                            method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(request)
-                        });
-                        const res = await response.json();
+                        const res = await App.API.enqueue(request);
                         App.State.db = res.data;
                         localStorage.setItem('ops_db_cache', JSON.stringify(res.data));
                         App.Utils.hideSync();
